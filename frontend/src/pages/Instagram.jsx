@@ -15,6 +15,12 @@ export default function Instagram() {
     } catch (e) { setError(e.response?.data?.message || 'Could not load Instagram settings'); }
   }, []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const oauthError = params.get('error');
+    if (oauthError) setError(oauthError);
+    if (oauthError || params.has('connected')) window.history.replaceState(null, '', window.location.pathname);
+  }, []);
 
   async function save(patch) {
     setBusy(true); setError('');

@@ -32,46 +32,79 @@ async function updateSettings(req, res) {
   return send(res, 'Instagram settings updated', statusView(config));
 }
 
+// OAuth state is a self-contained HMAC-signed token (nonce.expiry.signature) so that
+// multiple Connect clicks/tabs, server restarts or multiple instances never invalidate it.
+const OAUTH_STATE_TTL_MS = 30 * 60 * 1000;
+function oauthStateKey() {
+  const secret = process.env.INSTAGRAM_TOKEN_ENCRYPTION_KEY || process.env.META_APP_SECRET || process.env.JWT_SECRET;
+  if (!secret) throw new Error('INSTAGRAM_TOKEN_ENCRYPTION_KEY must be configured before connecting Instagram');
+  return crypto.createHash('sha256').update(`instagram-oauth-state:${secret}`).digest();
+}
+function signOAuthState() {
+  const payload = `${crypto.randomBytes(16).toString('hex')}.${Date.now() + OAUTH_STATE_TTL_MS}`;
+  return `${payload}.${crypto.createHmac('sha256', oauthStateKey()).update(payload).digest('hex')}`;
+}
+function verifyOAuthState(state) {
+  const parts = String(state || '').split('.');
+  if (parts.length !== 3) return false;
+  const [nonce, expiresAt, signature] = parts;
+  const expected = crypto.createHmac('sha256', oauthStateKey()).update(`${nonce}.${expiresAt}`).digest('hex');
+  if (signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return false;
+  return Number(expiresAt) > Date.now();
+}
+function dashboardRedirect(req, res, params) {
+  const url = new URL('/instagram', process.env.FRONTEND_BASE_URL || `${req.protocol}://${req.get('host')}`);
+  url.search = new URLSearchParams(params).toString();
+  return res.redirect(url.toString());
+}
+
 async function connect(req, res) {
   const { META_APP_ID, META_REDIRECT_URI, META_OAUTH_SCOPES } = process.env;
   if (!META_APP_ID || !META_REDIRECT_URI) return res.status(503).json({ success: false, message: 'Meta OAuth is not configured', errors: [] });
-  const config = await settings();
-  const state = crypto.randomBytes(32).toString('hex');
-  config.oauthStateHash = crypto.createHash('sha256').update(state).digest('hex');
-  config.oauthStateExpiresAt = new Date(Date.now() + 10 * 60 * 1000); await config.save();
+  let state;
+  try { state = signOAuthState(); }
+  catch (error) { return res.status(503).json({ success: false, message: error.message, errors: [] }); }
   const url = new URL(`https://www.facebook.com/${process.env.META_GRAPH_VERSION || 'v21.0'}/dialog/oauth`);
   url.search = new URLSearchParams({ client_id: META_APP_ID, redirect_uri: META_REDIRECT_URI, state, scope: META_OAUTH_SCOPES || 'instagram_basic,pages_show_list,pages_read_engagement' }).toString();
   return send(res, 'OAuth URL created', { url: url.toString() });
 }
 
 async function oauthCallback(req, res) {
-  const config = await require('../models/InstagramSettings').findOne({ key: 'default' }).select('+oauthStateHash +oauthStateExpiresAt');
-  const candidate = crypto.createHash('sha256').update(String(req.query.state || '')).digest('hex');
-  if (!config?.oauthStateHash || !config.oauthStateExpiresAt || config.oauthStateExpiresAt < new Date() || !crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(config.oauthStateHash))) {
-    return res.status(400).send('Instagram authorization state is invalid or expired. Return to ScreenSync and try again.');
+  const config = await settings();
+  if (!verifyOAuthState(req.query.state)) {
+    // A refresh/back-navigation onto a used callback URL after a successful connect is harmless.
+    if (config.accountId) return dashboardRedirect(req, res, { connected: '1' });
+    return dashboardRedirect(req, res, { error: 'Instagram authorization link expired. Click Connect Instagram again.' });
   }
-  config.oauthStateHash = null; config.oauthStateExpiresAt = null;
-  if (req.query.error || !req.query.code) { await config.save(); return res.status(400).send('Instagram authorization was not completed. Return to ScreenSync.'); }
+  if (req.query.error || !req.query.code) {
+    return dashboardRedirect(req, res, { error: req.query.error_description || 'Instagram authorization was cancelled or not completed.' });
+  }
   try {
     const tokenUrl = new URL(`https://graph.facebook.com/${process.env.META_GRAPH_VERSION || 'v21.0'}/oauth/access_token`);
     tokenUrl.search = new URLSearchParams({ client_id: process.env.META_APP_ID, client_secret: process.env.META_APP_SECRET, redirect_uri: process.env.META_REDIRECT_URI, code: req.query.code }).toString();
     const tokenResponse = await fetch(tokenUrl); const tokenPayload = await tokenResponse.json();
     if (!tokenResponse.ok || !tokenPayload.access_token) throw new Error(tokenPayload.error?.message || 'Meta token exchange failed');
+    // Swap the short-lived (~1-2h) user token for a long-lived (~60 day) one.
+    const longUrl = new URL(`https://graph.facebook.com/${process.env.META_GRAPH_VERSION || 'v21.0'}/oauth/access_token`);
+    longUrl.search = new URLSearchParams({ grant_type: 'fb_exchange_token', client_id: process.env.META_APP_ID, client_secret: process.env.META_APP_SECRET, fb_exchange_token: tokenPayload.access_token }).toString();
+    const longResponse = await fetch(longUrl); const longPayload = await longResponse.json();
+    if (!longResponse.ok || !longPayload.access_token) throw new Error(longPayload.error?.message || 'Meta long-lived token exchange failed');
+    const userToken = longPayload.access_token;
     const pagesUrl = new URL(`https://graph.facebook.com/${process.env.META_GRAPH_VERSION || 'v21.0'}/me/accounts`);
-    pagesUrl.search = new URLSearchParams({ fields: 'id,name,instagram_business_account{id,username}', access_token: tokenPayload.access_token }).toString();
+    pagesUrl.search = new URLSearchParams({ fields: 'id,name,access_token,instagram_business_account{id,username}', access_token: userToken }).toString();
     const pagesResponse = await fetch(pagesUrl); const pages = await pagesResponse.json();
     if (!pagesResponse.ok) throw new Error(pages.error?.message || 'Unable to find an Instagram professional account');
     const account = (pages.data || []).find((page) => page.instagram_business_account?.id);
     if (!account) throw new Error('No eligible Instagram professional account is linked to the authorized Facebook Page');
     config.accountId = account.instagram_business_account.id; config.username = account.instagram_business_account.username || null;
-    config.accessTokenEncrypted = encryptToken(tokenPayload.access_token);
-    config.tokenExpiresAt = tokenPayload.expires_in ? new Date(Date.now() + tokenPayload.expires_in * 1000) : null;
+    // A Page token obtained with a long-lived user token does not expire; fall back to the 60-day user token.
+    config.accessTokenEncrypted = encryptToken(account.access_token || userToken);
+    config.tokenExpiresAt = account.access_token ? null : (longPayload.expires_in ? new Date(Date.now() + longPayload.expires_in * 1000) : null);
     await config.save();
-    const dashboardUrl = new URL('/instagram?connected=1', process.env.FRONTEND_BASE_URL || `${req.protocol}://${req.get('host')}`);
-    return res.redirect(dashboardUrl.toString());
+    return dashboardRedirect(req, res, { connected: '1' });
   } catch (error) {
-    await config.save(); console.error('[Instagram] OAuth callback failed:', error.message);
-    return res.status(400).send('Instagram account connection failed. Check the Meta permissions and ScreenSync logs.');
+    console.error('[Instagram] OAuth callback failed:', error.message);
+    return dashboardRedirect(req, res, { error: `Instagram connection failed: ${error.message}` });
   }
 }
 
