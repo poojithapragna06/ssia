@@ -16,6 +16,7 @@ const alertRoutes = require('./routes/alertRoutes');
 const deviceRoutes = require('./routes/deviceRoutes');
 const playbackRoutes = require('./routes/playbackRoutes');
 const userRoutes = require('./routes/userRoutes');
+const instagramRoutes = require('./routes/instagramRoutes');
 
 const app = express();
 
@@ -76,7 +77,7 @@ app.use('/tv', express.static(SHARED_TV_DIR));
 
 // Dashboard pages share some paths with the API (/users): a browser opening a
 // page asks for HTML, the dashboard's API calls ask for JSON
-const DASHBOARD_PAGES = ['/', '/login', '/dashboard', '/playlists', '/tasks', '/alerts', '/devices', '/users'];
+const DASHBOARD_PAGES = ['/', '/login', '/dashboard', '/playlists', '/tasks', '/alerts', '/devices', '/users', '/instagram'];
 if (fs.existsSync(path.join(DASHBOARD_DIR, 'index.html'))) {
   app.get(DASHBOARD_PAGES, (req, res, next) => {
     if (req.accepts(['json', 'html']) !== 'html') return next();
@@ -88,6 +89,7 @@ if (fs.existsSync(path.join(DASHBOARD_DIR, 'index.html'))) {
 }
 
 app.use('/auth', authRoutes);
+app.use('/api/instagram', instagramRoutes);
 app.use('/', playlistRoutes);
 app.use('/', taskRoutes);
 app.use('/', alertRoutes);

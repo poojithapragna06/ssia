@@ -9,6 +9,7 @@ const links = [
   { to: '/alerts', label: 'Alerts' },
   { to: '/devices', label: 'Devices' },
   { to: '/users', label: 'Users', adminOnly: true },
+  { to: '/instagram', label: 'Instagram', adminOnly: true },
 ];
 
 export default function Sidebar() {

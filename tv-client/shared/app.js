@@ -1195,7 +1195,8 @@ function getMediaUrl(url) {
   // ----------------------------------------------------------
 
   if (
-    url.startsWith('/uploads/')
+    url.startsWith('/uploads/') ||
+    url.startsWith('/api/instagram/media/')
   ) {
 
     try {

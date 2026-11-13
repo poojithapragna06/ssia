@@ -94,4 +94,16 @@ export const userApi = {
   remove: (id) => api.delete(`/users/${id}`),
 };
 
+export const instagramApi = {
+  status: () => api.get('/api/instagram/status'),
+  update: (payload) => api.patch('/api/instagram/settings', payload),
+  connect: () => api.post('/api/instagram/connect'),
+  disconnect: () => api.delete('/api/instagram/connect'),
+  sync: (job) => api.post('/api/instagram/sync', { job }),
+  media: (status) => api.get('/api/instagram/media', { params: status ? { status } : {} }),
+  review: (id, payload) => api.patch(`/api/instagram/media/${id}/review`, payload),
+  remove: (id) => api.post(`/api/instagram/media/${id}/remove`),
+  history: () => api.get('/api/instagram/history'),
+};
+
 export default api;

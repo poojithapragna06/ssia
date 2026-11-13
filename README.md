@@ -160,7 +160,7 @@ rebuilds the dashboard. Reload the TV pages (or switch the TVs off and on).
 
 ## 5. Prerequisites
 
-* Node.js 18+
+* Node.js 20+ (required by the AWS JavaScript SDK used for persistent Instagram media storage)
 * MongoDB running locally (or a connection string to a remote instance)
 * A modern browser (Chrome/Edge/Firefox) for the admin UI and TV clients
 
@@ -490,7 +490,76 @@ Alerts and tasks are pruned client-side once expired; when the last active
 alert/task disappears, `resolveActiveContent()` automatically falls back to
 the next-highest priority content, ultimately resuming the standing playlist.
 
-## 16. Testing Instructions
+## 16. Instagram automation (disabled by default)
+
+The admin-only **Instagram** page is a preparation layer for Meta's official
+Instagram Graph API. Instagram settings are stored separately from playlists;
+the existing playlist and TV clients continue to work when Instagram is not
+connected. Imported post IDs are unique, tokens are encrypted with AES-256-GCM,
+and automation starts disabled. The OAuth flow only accepts a linked Instagram
+professional account exposed through an authorized Facebook Page.
+
+### Media, OCR and carousel processing
+
+Meta discovery, token storage, admin settings, media download, OCR, carousel
+processing, and GitHub Actions triggers are implemented. Each feed post is
+deduplicated by Instagram ID. Carousel children are downloaded in Meta's order
+and become consecutive playlist slides. Media bytes are stored in a private
+S3-compatible bucket; TVs stream them through ScreenSync and never receive
+bucket credentials or Meta's expiring media URLs. Render's local filesystem is
+not used for Instagram media.
+
+Tesseract OCR extracts text from every imported image slide. A conservative
+date parser distinguishes event dates from registration deadlines and offer
+expiry dates. Only a clearly labeled, unambiguous event date is automatically
+approved. Uncertain dates remain in the admin review queue, so uncertain OCR
+cannot trigger removal. Date-only event dates use Asia/Kolkata, and removal
+occurs after seven full IST days. Stories expire independently at the Meta
+timestamp plus 24 hours. Videos are stored and played but do not undergo OCR.
+Story and feed availability depends on the Meta app permissions and API
+responses. Tesseract language data must be downloadable by Render on its first
+OCR run.
+
+### Configuration and later activation
+
+Copy `backend/.env.example` to `backend/.env` (or set these values in Render).
+The required Instagram values are `META_APP_ID`, `META_APP_SECRET`,
+`META_REDIRECT_URI`, `META_GRAPH_VERSION`, `META_OAUTH_SCOPES`,
+`INSTAGRAM_TOKEN_ENCRYPTION_KEY`, `INSTAGRAM_SCHEDULER_SECRET`,
+`INSTAGRAM_OBJECT_STORAGE_BUCKET`, `INSTAGRAM_OBJECT_STORAGE_REGION`, and
+`FRONTEND_BASE_URL`. For AWS S3, configure credentials through the AWS SDK
+credential chain (prefer a Render IAM role where available). For an S3-compatible
+provider also set `INSTAGRAM_OBJECT_STORAGE_ENDPOINT` and, if needed,
+`INSTAGRAM_OBJECT_STORAGE_FORCE_PATH_STYLE=true`. `TESSERACT_LANGUAGES` accepts
+Tesseract language codes and defaults to `eng`. Use long, random, different
+secrets for token encryption and scheduler authentication. Back up the
+encryption key securely; losing it makes stored Meta tokens unreadable.
+Automation remains disabled by default.
+
+In the Meta developer console, configure the exact redirect URI above and obtain
+the permissions required for the college's professional account. Configure the
+Meta app ID/secret and the key values in Render's environment settings, then
+deploy. Sign in as a ScreenSync admin, open **Instagram**, and use **Connect
+Instagram** to authorize a linked professional account. Verify the account and
+permissions before enabling sync. Create a private S3 bucket and grant the
+Render service read/write access before enabling feed or story sync.
+
+### GitHub Actions scheduling
+
+The `.github/workflows/instagram-*.yml` workflows use UTC cron schedules: feed
+daily at 02:17 UTC, stories every six hours at minute 23, and expiry daily at
+03:41 UTC. In the repository's **Settings → Secrets and variables → Actions**,
+add `SCREENSYNC_URL` (the Render base URL without a trailing slash) and
+`INSTAGRAM_SCHEDULER_SECRET` (the same secret configured in Render). Workflow
+concurrency groups prevent overlapping executions of the same workflow, and
+the event-expiry endpoint also uses a database lease. Jobs retry transient HTTP
+errors and write sync history to MongoDB.
+
+The three Instagram Actions can be manually dispatched for operations. Normal
+playlist creation, editing, deletion, WebSocket broadcasts, and TV playback
+continue to use the existing ScreenSync APIs and shared TV client.
+
+## 17. Testing Instructions
 
 ### Authentication
 ```bash

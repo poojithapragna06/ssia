@@ -69,13 +69,16 @@ export default function Playlists() {
     setName(playlist.name);
 
     setItems(
-      playlist.items.map((it) => ({
+      playlist.items.filter((it) => it.source !== 'instagram').map((it) => ({
         ...it,
         source: 'url',
         file: null,
       }))
     );
 
+    if (playlist.items.some((it) => it.source === 'instagram')) {
+      setError('Instagram slides are managed in Instagram Automation and will stay in the playlist while you edit manual items.');
+    }
     setShowForm(true);
   }
 

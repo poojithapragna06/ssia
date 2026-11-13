@@ -29,6 +29,10 @@ const playlistItemSchema = new mongoose.Schema(
       min: [1, 'Duration must be at least 1 second'],
       max: [21600, 'Duration must be 6 hours or less'],
     },
+    // Imported items are tagged so Instagram sync can update only its own
+    // entries while preserving every manually managed playlist item.
+    source: { type: String, enum: ['manual', 'instagram'], default: 'manual' },
+    instagramId: { type: String, default: null },
   },
   { _id: true }
 );

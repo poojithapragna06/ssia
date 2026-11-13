@@ -1,0 +1,21 @@
+name: Instagram feed sync
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+concurrency:
+  group: screensync-instagram-feed
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger ScreenSync feed sync
+        env:
+          SCREENSYNC_URL: ${{ secrets.SCREENSYNC_URL }}
+          JOB_SECRET: ${{ secrets.INSTAGRAM_SCHEDULER_SECRET }}
+        run: |
+          test -n "$SCREENSYNC_URL" && test -n "$JOB_SECRET"
+          curl --fail-with-body --retry 3 --retry-all-errors --retry-delay 10 \
+            -X POST "$SCREENSYNC_URL/api/instagram/jobs/feed" \
+            -H "x-screensync-job-secret: $JOB_SECRET"

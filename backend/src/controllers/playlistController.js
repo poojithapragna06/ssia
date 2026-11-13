@@ -35,7 +35,10 @@ const updatePlaylist = asyncHandler(async (req, res) => {
   }
 
   if (name !== undefined) playlist.name = name;
-  if (items !== undefined) playlist.items = items;
+  if (items !== undefined) {
+    const importedItems = playlist.items.filter((item) => item.source === 'instagram');
+    playlist.items = [...items.filter((item) => item.source !== 'instagram'), ...importedItems];
+  }
 
   await playlist.save();
 
@@ -129,6 +132,15 @@ const broadcastPlaylist = asyncHandler(async (req, res) => {
     items: playlist.items,
     sync_timestamp: syncTimestamp,
   });
+
+  // If Instagram automation is enabled, merge already-approved imported slides
+  // after the manual playlist becomes active. A disconnected feature never
+  // blocks the established manual broadcast path.
+  try {
+    await require('../services/instagramService').refreshActivePlaylist();
+  } catch (error) {
+    console.error('[Instagram] Could not merge approved media into the playlist:', error.message);
+  }
 
   return res.status(200).json({
     success: true,
